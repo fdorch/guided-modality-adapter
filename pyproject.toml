@@ -1,0 +1,11 @@
+[project]
+name = "guided-modality-adapter"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "omegaconf>=2.3.0",
+    "pyannote-audio>=4.0.2",
+    "transformers>=4.57.3",
+]
