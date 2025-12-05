@@ -1,1 +1,1 @@
-# Speaker embeddings-guided Modality Adapters for SpeechLLMs
+# PyannoteAI-enabled SpeechLLM for SA-ASR
