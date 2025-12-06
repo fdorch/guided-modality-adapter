@@ -1,187 +1,225 @@
+import logging
 import os
+from typing import Any, Dict, List, Tuple
+
 import torch
 import torch.nn as nn
-from torch import Tensor
-from typing import Union, Optional, Dict, Any, Tuple
-
 from pyannote.audio.models.embedding.xvector import XVectorSincNet
+from rich.logging import RichHandler
+from torch import Tensor
 
-# --- Configuration ---
-LOCAL_WEIGHTS_PATH = "/gpfs/mariana/home/artfed/projects/pyannote_embed.bin"
-DEFAULT_EMBEDDING_DIM = 512
-DEFAULT_SAMPLE_RATE = 16000
-# ---------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)],
+)
+logger = logging.getLogger("rich")
 
 
 class SpeakerEmbeddingModel(nn.Module):
-    def __init__(
-        self,
-        embedding_dim: int = DEFAULT_EMBEDDING_DIM,
-        sample_rate: int = DEFAULT_SAMPLE_RATE,
-    ):
+    """
+    Project-compliant wrapper around XVectorSincNet.
+
+    Responsibilities:
+        - forward(): process a single window → (B, D)
+        - extract_dense(): sliding-window extraction for one waveform
+        - load_checkpoint(): handle arbitrary .bin checkpoints
+    """
+
+    def __init__(self, cfg: Dict[str, Any]):
         super().__init__()
 
-        sincnet_params = {"stride": 10}
+        self.cfg = cfg
+        self.sample_rate = cfg["sample_rate"]
+        self.window_sec = cfg.get("window_sec", 1.0)
+        self.hop_sec = cfg.get("hop_sec", 0.5)
+        self.batch_size_windows = cfg.get("batch_size_windows", 32)
+        embedding_dim = cfg.get("embedding_dim", 512)
+
+        sincnet_params = {"stride": cfg.get("stride", 10)}
 
         self.xvector = XVectorSincNet(
-            sample_rate=sample_rate,
+            sample_rate=self.sample_rate,
             num_channels=1,
             dimension=embedding_dim,
             sincnet=sincnet_params,
         )
 
-        self.sample_rate = sample_rate
-        print(
-            f"Initialized XVectorSincNet. Ready to load weights from {LOCAL_WEIGHTS_PATH}."
+        self.load_checkpoint(cfg["checkpoint_path"])
+        logger.info(
+            f"Loaded speaker embedding model from {cfg['checkpoint_path']}"
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        if x.ndim == 1:
-            x = x.unsqueeze(0)  # (1, samples)
+        """
+        Args:
+            x: (B, samples) or (B, 1, samples)
+        Returns:
+            embeddings: (B, D)
+        """
         if x.ndim == 2:
-            x = x.unsqueeze(1)  # (batch, 1, samples)
+            x = x.unsqueeze(1)
         return self.xvector(x)
 
-    def extract_embedding_from_waveform(self, waveform: Tensor) -> Tensor:
-        device = next(self.parameters()).device
-        waveform = waveform.to(device)
-        self.eval()
-        with torch.no_grad():
-            return self.forward(waveform)
+    def load_checkpoint(self, path: str):
+        """
+        Load weights from a pyannote .bin checkpoint or raw state_dict.
+        Handles prefix stripping and mismatched keys.
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
 
-    def extract_dense_embeddings(
+        try:
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError as e:
+            logger.warning(f"Failed to load checkpoint with weights_only=False: {e}")
+            return
+
+        state = ckpt.get("state_dict", ckpt)
+
+        model_keys = set(self.xvector.state_dict().keys())
+        mapped = _map_state_dict_with_prefix_stripping(state, model_keys)
+
+        final_state = self.xvector.state_dict()
+        final_state.update(mapped)
+
+        self.xvector.load_state_dict(final_state, strict=False)
+
+    @torch.no_grad()
+    def extract_dense(
         self,
         waveform: Tensor,
-        window_sec: float = 1.0,
-        hop_sec: float = 0.5,
-        device: str = "cpu",
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Convert a long waveform into dense per-window speaker embeddings.
-
-        Args:
-            waveform: Tensor of shape (samples,) or (1, samples)
-            window_sec: size of sliding window in seconds
-            hop_sec: hop between consecutive windows in seconds
-            device: device to run model on
+        Extract dense embeddings for a single waveform.
 
         Returns:
-            embeddings: Tensor of shape (num_windows, embedding_dim)
-            window_starts: Tensor of shape (num_windows,) with start sample indices
+            embeddings:    (N, D)
+            window_starts: (N,)
         """
-        self.eval()
-        self.to(device)
-
         if waveform.ndim == 1:
             waveform = waveform.unsqueeze(0)
-        waveform = waveform.to(device)
+        elif waveform.ndim == 2 and waveform.size(0) != 1:
+            raise ValueError("extract_dense expects a single waveform: (T,) or (1,T)")
 
-        sample_rate = self.sample_rate
-        window_size = int(window_sec * sample_rate)
-        hop_size = int(hop_sec * sample_rate)
-        total_samples = waveform.shape[1]
+        embs, starts = _dense_batch_extract(
+            self,
+            waveform,
+            window_sec=self.window_sec,
+            hop_sec=self.hop_sec,
+            device=waveform.device,
+            batch_size_windows=self.batch_size_windows,
+        )
 
-        embeddings = []
-        window_starts = []
-
-        for start in range(0, total_samples - window_size + 1, hop_size):
-            end = start + window_size
-            win_wave = waveform[:, start:end]
-            with torch.no_grad():
-                emb = self.extract_embedding_from_waveform(win_wave)  # (1, emb_dim)
-            embeddings.append(emb)
-            window_starts.append(start)
-
-        if len(embeddings) == 0:
-            with torch.no_grad():
-                emb = self.extract_embedding_from_waveform(waveform)
-            embeddings = [emb]
-            window_starts = [0]
-
-        embeddings = torch.vstack(embeddings)  # (num_windows, embedding_dim)
-        window_starts = torch.tensor(window_starts, dtype=torch.int)
-
-        return embeddings, window_starts
+        return embs[0], starts[0]
 
 
-# --- Checkpoint loading and prefix mapping functions ---
-def _strip_prefix(k: str, prefixes=("model.", "module.", "xvector.")) -> str:
-    for p in prefixes:
-        if k.startswith(p):
-            return k[len(p) :]
-    return k
+def _dense_batch_extract(
+    model: SpeakerEmbeddingModel,
+    waveforms: Tensor,
+    window_sec: float,
+    hop_sec: float,
+    device: torch.device,
+    batch_size_windows: int,
+) -> Tuple[Tensor, Tensor]:
+    """
+    Internal dense window extraction for batched waveforms.
+    Produces right-padded outputs for consistent shape.
+    """
+    model.eval()
+    model.to(device)
+    waveforms = waveforms.to(device)
 
-
-def build_key_mapping(
-    checkpoint_state_dict: Dict[str, Any], model_state_dict_keys: set
-) -> Dict[str, Any]:
-    mapped: Dict[str, Any] = {}
-    used_model_keys = set()
-
-    for ck_k, ck_v in checkpoint_state_dict.items():
-        candidates = [ck_k, _strip_prefix(ck_k), ck_k.removeprefix("xvector.")]
-        matched = None
-        for c in candidates:
-            if c in model_state_dict_keys and c not in used_model_keys:
-                matched = c
-                break
-
-        if matched is None:
-            alt_candidates = [
-                "xvector." + ck_k,
-                "model." + ck_k,
-                "module." + ck_k,
-                ck_k.replace("xvector.", ""),
-            ]
-            for c in alt_candidates:
-                if c in model_state_dict_keys and c not in used_model_keys:
-                    matched = c
-                    break
-
-        if matched:
-            mapped[matched] = ck_v
-            used_model_keys.add(matched)
-
-    return mapped
-
-
-def load_checkpoint_into_model(model: SpeakerEmbeddingModel, ckpt_path: str):
-    if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-
-    print(f"Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    raw_state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-
-    model_keys = set(model.xvector.state_dict().keys())
-    mapped_state = build_key_mapping(raw_state, model_keys)
-
-    model_sd = model.xvector.state_dict()
-    to_load = model_sd.copy()
-    to_load.update(mapped_state)
-
-    try:
-        if set(mapped_state.keys()) == model_keys:
-            model.xvector.load_state_dict(to_load, strict=True)
-        else:
-            model.xvector.load_state_dict(to_load, strict=False)
-    except Exception:
-        cleaned = {k: v for k, v in raw_state.items()}
-        model.xvector.load_state_dict(cleaned, strict=False)
-
-
-# --- Example usage ---
-if __name__ == "__main__":
-    model = SpeakerEmbeddingModel()
-    load_checkpoint_into_model(model, LOCAL_WEIGHTS_PATH)
-
+    B, _ = waveforms.shape
     sr = model.sample_rate
-    duration_sec = 30.0
-    n_samples = int(sr * duration_sec)
-    dummy_waveform = torch.randn(1, n_samples)
+    window_size = int(window_sec * sr)
+    hop_size = int(hop_sec * sr)
 
-    embeddings, starts = model.extract_dense_embeddings(
-        dummy_waveform, window_sec=1.0, hop_sec=0.5
-    )
-    print("Dense embeddings shape:", embeddings.shape)
-    print("Window start indices:", starts)
+    all_windows: List[Tensor] = []
+    all_indices: List[Tuple[int, int]] = []
+    counts: List[int] = []
+
+    for b in range(B):
+        wav = waveforms[b]
+        T = wav.shape[-1]
+        starts = []
+
+        if T >= window_size:
+            for start in range(0, T - window_size + 1, hop_size):
+                all_windows.append(wav[start : start + window_size].unsqueeze(0))
+                all_indices.append((b, start))
+                starts.append(start)
+        else:
+            # fallback: whole waveform as one window
+            all_windows.append(wav.unsqueeze(0))
+            all_indices.append((b, 0))
+            starts.append(0)
+
+        counts.append(len(starts))
+
+    if not all_windows:
+        D = model.cfg.get("embedding_dim", 512)
+        return (
+            waveforms.new_zeros(B, 0, D),
+            waveforms.new_zeros(B, 0, dtype=torch.long),
+        )
+
+    # Stack windows
+    M = len(all_windows)
+    windows_tensor = torch.cat(all_windows, dim=0).unsqueeze(1)  # (M,1,L)
+
+    # Forward in chunks
+    embs_list = []
+    for i in range(0, M, batch_size_windows):
+        chunk = windows_tensor[i : i + batch_size_windows]
+        emb = model.forward(chunk)  # (m, D)
+        embs_list.append(emb)
+
+    embs = torch.cat(embs_list, dim=0)  # (M, D)
+    D = embs.shape[-1]
+
+    max_N = max(counts)
+    batch_embs = waveforms.new_zeros(B, max_N, D)
+    batch_starts = waveforms.new_zeros(B, max_N, dtype=torch.long)
+
+    cursor = 0
+    for b in range(B):
+        n_w = counts[b]
+        if n_w > 0:
+            batch_embs[b, :n_w] = embs[cursor : cursor + n_w]
+            starts_for_b = [
+                idx for (bb, idx) in all_indices[cursor : cursor + n_w] if bb == b
+            ]
+            batch_starts[b, :n_w] = torch.tensor(
+                starts_for_b, dtype=torch.long, device=device
+            )
+            cursor += n_w
+
+    return batch_embs, batch_starts
+
+
+def _map_state_dict_with_prefix_stripping(
+    raw_state: Dict[str, Any],
+    model_keys: set,
+) -> Dict[str, Any]:
+    """
+    Map arbitrary checkpoint keys → model keys,
+    stripping prefixes like:
+        - module.
+        - model.
+        - xvector.
+    """
+    mapped = {}
+    for k, v in raw_state.items():
+        candidates = [
+            k,
+            k.removeprefix("module."),
+            k.removeprefix("model."),
+            k.removeprefix("xvector."),
+        ]
+        for c in candidates:
+            if c in model_keys:
+                mapped[c] = v
+                break
+    return mapped
