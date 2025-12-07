@@ -7,7 +7,8 @@ __pycache__/
 *.so
 
 slurm*
-
+t.py
+dcgm*
 
 # Distribution / packaging
 .Python
