@@ -26,7 +26,7 @@ Because of the underlying LLM usage, the proposed method could be used to do a v
 
 ## Projector Module
 <p align="center">
- <img src="assets/images/projector.png" alt="Architecture Overview" width="70%">
+ <img src="assets/images/projector.png" alt="Architecture Overview" width="80%">
 </p>
 
 Both speaker projector and speech projector modules are implemented as Qformer networks.
