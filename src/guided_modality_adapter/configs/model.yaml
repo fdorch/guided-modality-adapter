@@ -3,7 +3,6 @@ whisper:
   freeze: true
 
 speaker:
-  model_type: "xvector_sincnet"
   checkpoint_path: "/gpfs/mariana/home/artfed/projects/guided-modality-adapter/assets/checkpoints/pyannote_embed.bin"
   embedding_dim: 512
   sample_rate: 16000

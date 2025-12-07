@@ -51,7 +51,7 @@ class WhisperEncoderWrapper(nn.Module):
     def waveform_to_features(
         self,
         waveform: Tensor,
-        sample_rate: int,
+        sample_rate: Optional[int] = 16000,
     ) -> Tensor:
         """
         Convert raw waveform → Whisper log-mel features.
@@ -74,7 +74,7 @@ class WhisperEncoderWrapper(nn.Module):
         )
         return inputs.input_features.to(self.device)
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward(
         self,
         input_features: Tensor,
@@ -97,7 +97,7 @@ class WhisperEncoderWrapper(nn.Module):
             }
         """
         # convert tensor to acceptable format
-        input_features = input_features.to(self.device)
+        input_features = self.waveform_to_features(input_features)
         if attention_mask is not None:
             attention_mask = attention_mask.to(self.device)
 

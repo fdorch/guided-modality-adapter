@@ -1,23 +1,21 @@
 from typing import Any, Dict, Optional, Tuple
-from typing_extensions import Self
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from embedding import SpeakerEmbeddingModel
+from llm import LLMModel
+from projectors import SAASRAdapter
 from torch import Tensor
-
-from .embedding import SpeakerEmbeddingModel
-from .llm import LLMModel
-from .projectors import SAASRAdapter
-from .whisper import WhisperEncoderWrapper
+from typing_extensions import Self
+from utils.interpolate import interpolate_speaker_embeddings_in_time as interpolate
+from whisper import WhisperEncoderWrapper
 
 
 class SAASRModel(nn.Module):
     """
     Unified SA-ASR model that composes:
       SpeakerEmbeddingModel + WhisperEncoderWrapper + SAASRAdapter + LLMModel
-
-    Config (`cfg`) should be the dict produced from your model.yaml via OmegaConf.
     """
 
     def __init__(self, cfg: Dict[str, Any], device: Optional[torch.device] = None):
@@ -27,7 +25,7 @@ class SAASRModel(nn.Module):
         )
 
         spk_cfg = cfg.get("speaker", {})
-        self.speaker_model = SpeakerEmbeddingModel(**spk_cfg)
+        self.speaker_model = SpeakerEmbeddingModel(spk_cfg)
         self.speaker_model.to(self.device)
 
         whisper_cfg = cfg.get("whisper", {})
@@ -63,7 +61,7 @@ class SAASRModel(nn.Module):
     def forward(
         self,
         waveform: Tensor,
-        input_ids: Tensor,
+        input_ids: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -83,10 +81,20 @@ class SAASRModel(nn.Module):
         # Step 2: Pass audio through Whisper encoder
         encoder_outputs = self.whisper(waveform)
 
-        # Step 3: Adapt Whisper outputs with speaker embeddings
-        adapted_outputs = self.adapter(encoder_outputs, dense_embeddings, dense_times)
+        # Step 3: Upsample speaker embeddings to match Whisper encoder time steps
+        dense_embeddings = interpolate(
+            dense_embeddings,
+            dense_times,
+            self.sample_rate,
+            self.window_sec,
+            encoder_outputs["frame_times_seconds"],
+            device=self.device,
+        )
 
-        # Step 4: Pass adapted outputs to LLM
+        # Step 4: Adapt Whisper outputs with speaker embeddings
+        adapted_outputs = self.adapter(encoder_outputs["hidden_states"], dense_embeddings)
+
+        # Step 5: Pass adapted outputs to LLM
         llm_outputs = self.llm(
             adapted_outputs, input_ids, attention_mask=attention_mask
         )
@@ -97,7 +105,7 @@ class SAASRModel(nn.Module):
     def generate_from_audio(
         self,
         waveform: Tensor,
-        max_length: int = 50,
+        max_length: int = 4096,
         num_beams: int = 5,
         **generate_kwargs: Any,
     ) -> Tensor:
