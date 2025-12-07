@@ -1,8 +1,8 @@
 from typing import Any, Dict, Optional
 
 import torch.nn as nn
-from components.attn import CrossAttentionBlock
-from components.qformer import QueryFormerBase
+from .components.attn import CrossAttentionBlock
+from .components.qformer import QueryFormerBase
 from torch import Tensor
 
 

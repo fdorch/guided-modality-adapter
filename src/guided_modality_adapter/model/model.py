@@ -3,13 +3,14 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from embedding import SpeakerEmbeddingModel
-from llm import LLMModel
-from projectors import SAASRAdapter
+from .embedding import SpeakerEmbeddingModel
+from .llm import LLMModel
+from .projectors import SAASRAdapter
 from torch import Tensor
 from typing_extensions import Self
-from utils.interpolate import interpolate_speaker_embeddings_in_time as interpolate
-from whisper import WhisperEncoderWrapper
+from .utils.interpolate import interpolate_speaker_embeddings_in_time as interpolate
+
+from .whisper import WhisperEncoderWrapper
 
 
 class SAASRModel(nn.Module):
@@ -92,7 +93,9 @@ class SAASRModel(nn.Module):
         )
 
         # Step 4: Adapt Whisper outputs with speaker embeddings
-        adapted_outputs = self.adapter(encoder_outputs["hidden_states"], dense_embeddings)
+        adapted_outputs = self.adapter(
+            encoder_outputs["hidden_states"], dense_embeddings
+        )
 
         # Step 5: Pass adapted outputs to LLM
         llm_outputs = self.llm(

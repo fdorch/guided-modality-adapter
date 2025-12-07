@@ -4,7 +4,7 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from torch import LongTensor, Tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from utils.extend_tokenizer import add_timestamp_tokens, extend_tokenizer_with_speakers
+from .utils.extend_tokenizer import add_timestamp_tokens, extend_tokenizer_with_speakers
 
 
 class LLMModel(nn.Module):
