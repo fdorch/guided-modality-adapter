@@ -1,0 +1,12 @@
+omegaconf
+peft
+tyro
+transformers
+torch
+torchaudio
+openai-whisper
+pyannote-audio
+pyannoteai-sdk
+streamlit
+accelerate
+huggingface-hub

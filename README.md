@@ -20,13 +20,13 @@ Because of the underlying LLM usage, the proposed method could be used to do a v
 
 ## 📍Architecture Overview
 <p align="center">
- <img src="assets/images/high-level-arch.png" alt="Architecture Overview" width="60%">
+ <img src="assets/images/high-level-arch.png" alt="Architecture Overview" width="80%">
 </p>
 
 
 ## 🔎 Projector Module
 <p align="center">
- <img src="assets/images/projector.png" alt="Architecture Overview" width="80%">
+ <img src="assets/images/projector.png" alt="Architecture Overview" width="100%">
 </p>
 
 Both speaker projector and speech projector modules are implemented as Qformer networks.
@@ -53,6 +53,14 @@ cd guided-modality-adapter
 uv sync
 source .venv/bin/activate
 ```
+However, if you prefer using `pip` and `conda`, you can install the required dependencies as follows:
+
+```bash
+conda create -n guided-modality-adapter python=3.10
+conda activate guided-modality-adapter
+pip install -r requirements.txt
+```
+
 
 ### 📚 Download needed dataset & extract
 
@@ -67,6 +75,16 @@ uv run --active python scripts/download.py --url <URL_OF_THE_FILE> --download_di
 ```
 ### 📐 Fill in configuration files
 Modify the configuration files located in the `configs/` directory to specify dataset paths, model parameters, and training settings.
+
+```bash
+data:
+  root_dir: "data"              # where download.py put things, e.g. data/
+  train_manifest: "train.jsonl" # relative to root_dir
+  val_manifest: "val.jsonl"     # relative to root_dir
+  sample_rate: 16000
+  batch_size: 4
+  num_workers: 4
+```
 
 ### 🏋️‍♂️ Start Training
 ```bash
