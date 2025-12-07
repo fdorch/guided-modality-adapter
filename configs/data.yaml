@@ -1,0 +1,7 @@
+data:
+  root_dir: "data"              # where download.py put things, e.g. data/
+  train_manifest: "train.jsonl" # relative to root_dir
+  val_manifest: "val.jsonl"     # relative to root_dir
+  sample_rate: 16000
+  batch_size: 4
+  num_workers: 4

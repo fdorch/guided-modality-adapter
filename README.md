@@ -11,7 +11,7 @@ This repository contains code and instructions for using **PyannoteAI-enabled Sp
 - ✨ **LoRA-tuned LLAMA-3.2** : leverages Low-Rank Adaptation (LoRA) to fine-tune LLAMA-3.2 with extended vocabulary for the SA-ASR task.
 
 ⚡ **Versatility of the Approach** <br>
-Because of the underlying LLM usage, the proposed method could be used to do a variety of tasks related simultaneously to speech such as:
+Because of the underlying LLM usage, the proposed method could be used to do a variety of tasks simultaneously related to speech such as:
 - Transcript summarization
 - Keyword extraction
 - Topic segmentation
@@ -58,4 +58,17 @@ source .venv/bin/activate
 
 ```bash
 uv run --active python scripts/download.py --url <URL_OF_THE_FILE> --download_dir <TARGET_DIRECTORY>
+```
+
+### 🔧 Convert dataset into `.jsonl` entries
+
+```bash
+{"audio_path": "data/audio/utt1.wav", "transcript": "hello world", "timestamps": [0.0, 1.2], "speaker_segments": [[0.0, 1.2, 0]]}
+```
+### 📐 Fill in configuration files
+Modify the configuration files located in the `configs/` directory to specify dataset paths, model parameters, and training settings.
+
+### 🏋️‍♂️ Start Training
+```bash
+uv run --active python run.py
 ```

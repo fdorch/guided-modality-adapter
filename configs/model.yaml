@@ -39,3 +39,13 @@ llm:
   lora_alpha: 16
   target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
   lora_dropout: 0.05
+
+training:
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_steps: 1000
+  max_steps: 100000
+  max_epochs: 5
+  grad_clip: 1.0
+  precision: 16
+  log_every_n_steps: 50

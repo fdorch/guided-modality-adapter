@@ -1,28 +1,45 @@
-import math
-import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+import json
+from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
+ 
+from guided_modality_adapter.model.utils.audio import w2t
 
 
 @dataclass
 class UtteranceExample:
     audio_path: str
-    transcript_ids: List[int]
+    transcript: str
     speaker_segments: Optional[List[Tuple[float, float, int]]] = None
+
+
+def load_manifest_jsonl(path: Path) -> List[UtteranceExample]:
+    examples: List[UtteranceExample] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            segs = obj.get("speaker_segments")
+            if segs is not None:
+                segs = [(float(s), float(e), int(spk)) for s, e, spk in segs]
+            examples.append(
+                UtteranceExample(
+                    audio_path=obj["audio_path"],
+                    transcript=obj["transcript"],
+                    speaker_segments=segs,
+                )
+            )
+    return examples
 
 
 class SAASRDataset(Dataset):
     """
-    Generic dataset for SA-ASR.
-
-    Assumes an external manifest (e.g., JSON or TSV) has been parsed into
-    a list of UtteranceExample objects. Here we keep it abstract and expect
-    a list of dicts/structures to be passed in.
+    Generic dataset: waveform + transcript (+ optional speaker segments).
     """
 
     def __init__(
@@ -30,30 +47,27 @@ class SAASRDataset(Dataset):
         examples: List[UtteranceExample],
         tokenizer,
         sample_rate: int = 16000,
-        max_duration_sec: Optional[float] = None,
-        audio_loader=None,
     ):
         super().__init__()
         self.examples = examples
         self.tokenizer = tokenizer
         self.sample_rate = sample_rate
-        self.max_duration_sec = max_duration_sec
-        # audio_loader: callable(path, sample_rate) -> Tensor (samples,)
-        self.audio_loader = audio_loader or self._default_audio_loader
 
     def __len__(self) -> int:
         return len(self.examples)
 
-    def _default_audio_loader(self, path: str, sample_rate: int) -> Tensor:
-        raise NotImplementedError(
-            "Provide an audio_loader that returns a 1D float tensor at the target sample rate."
-        )
-
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         ex = self.examples[idx]
+        # use your audio util to load and resample
+        waveform: Tensor = w2t(ex.audio_path, self.sample_rate)  # (samples,)
 
-        waveform = self.audio_loader(ex.audio_path, self.sample_rate)  # (samples,)
-        transcript_ids = torch.tensor(ex.transcript_ids, dtype=torch.long)
+        tok = self.tokenizer(
+            ex.transcript,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        # assume tokenizer returns input_ids with shape (1, L)
+        transcript_ids = tok["input_ids"].squeeze(0).to(torch.long)
 
         item: Dict[str, Any] = {
             "waveform": waveform,
@@ -65,23 +79,10 @@ class SAASRDataset(Dataset):
         return item
 
 
-def saasr_collate_fn(
-    batch: List[Dict[str, Any]],
-    pad_token_id: int,
+def _collate_saasr(
+    batch: List[Dict[str, Any]], pad_token_id: int
 ) -> Dict[str, Any]:
-    """
-    Collate function for variable-length audio and text.
-
-    Returns:
-        {
-          "waveforms": (B, T_max),
-          "waveform_lengths": (B,),
-          "transcript_ids": (B, L_max),
-          "transcript_lengths": (B,),
-          "speaker_segments": list[list[(start, end, spk_id)]]
-        }
-    """
-    # Waveforms
+    # waveforms: pad to max length
     waveforms = [b["waveform"] for b in batch]
     lengths = torch.tensor([w.shape[-1] for w in waveforms], dtype=torch.long)
     max_len = int(lengths.max().item())
@@ -91,7 +92,7 @@ def saasr_collate_fn(
     for i, w in enumerate(waveforms):
         padded_waveforms[i, : w.shape[-1]] = w
 
-    # Transcripts
+    # transcripts: pad with pad_token_id
     transcripts = [b["transcript_ids"] for b in batch]
     t_lens = torch.tensor([t.shape[-1] for t in transcripts], dtype=torch.long)
     max_t_len = int(t_lens.max().item())
@@ -100,7 +101,6 @@ def saasr_collate_fn(
     for i, t in enumerate(transcripts):
         padded_transcripts[i, : t.shape[-1]] = t
 
-    # Speaker segments (kept as list of lists; model utilities can align later)
     speaker_segments = [b.get("speaker_segments", []) for b in batch]
 
     return {
@@ -114,57 +114,61 @@ def saasr_collate_fn(
 
 
 class SAASRDataModule(pl.LightningDataModule):
+    """
+    LightningDataModule configurable from configs/data.yaml
+    """
+
     def __init__(
         self,
-        train_examples: List[UtteranceExample],
-        val_examples: List[UtteranceExample],
+        data_cfg: Dict[str, Any],
         tokenizer,
-        sample_rate: int = 16000,
-        batch_size: int = 4,
-        num_workers: int = 4,
-        audio_loader=None,
     ):
         super().__init__()
-        self.train_examples = train_examples
-        self.val_examples = val_examples
+        self.data_cfg = data_cfg["data"]
         self.tokenizer = tokenizer
-        self.sample_rate = sample_rate
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.audio_loader = audio_loader
+
+        self.root = Path(self.data_cfg["root_dir"])
+        self.sample_rate = int(self.data_cfg.get("sample_rate", 16000))
+        self.batch_size = int(self.data_cfg.get("batch_size", 4))
+        self.num_workers = int(self.data_cfg.get("num_workers", 4))
+
+        self.train_dataset: Optional[SAASRDataset] = None
+        self.val_dataset: Optional[SAASRDataset] = None
 
     def setup(self, stage: Optional[str] = None):
+        train_manifest = self.root / self.data_cfg["train_manifest"]
+        val_manifest = self.root / self.data_cfg["val_manifest"]
+
+        train_examples = load_manifest_jsonl(train_manifest)
+        val_examples = load_manifest_jsonl(val_manifest)
+
         self.train_dataset = SAASRDataset(
-            self.train_examples,
-            tokenizer=self.tokenizer,
-            sample_rate=self.sample_rate,
-            audio_loader=self.audio_loader,
+            train_examples, tokenizer=self.tokenizer, sample_rate=self.sample_rate
         )
         self.val_dataset = SAASRDataset(
-            self.val_examples,
-            tokenizer=self.tokenizer,
-            sample_rate=self.sample_rate,
-            audio_loader=self.audio_loader,
+            val_examples, tokenizer=self.tokenizer, sample_rate=self.sample_rate
         )
 
     def train_dataloader(self) -> DataLoader:
+        assert self.train_dataset is not None
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            collate_fn=lambda b: saasr_collate_fn(
+            collate_fn=lambda b: _collate_saasr(
                 b, pad_token_id=self.tokenizer.pad_token_id
             ),
         )
 
     def val_dataloader(self) -> DataLoader:
+        assert self.val_dataset is not None
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=lambda b: saasr_collate_fn(
+            collate_fn=lambda b: _collate_saasr(
                 b, pad_token_id=self.tokenizer.pad_token_id
             ),
         )
