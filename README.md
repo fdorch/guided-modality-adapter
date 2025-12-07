@@ -20,7 +20,7 @@ Because of the underlying LLM usage, the proposed method could be used to do a v
 
 ## 📍Architecture Overview
 <p align="center">
- <img src="assets/images/high-level-arch.png" alt="Architecture Overview" width="60%">
+ <img src="assets/images/high-level-arch.png" alt="Architecture Overview" width="80%">
 </p>
 
 
