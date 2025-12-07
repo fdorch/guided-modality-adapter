@@ -1,0 +1,51 @@
+whisper:
+  model_name: "openai/whisper-large-v3"
+  freeze: true
+
+speaker:
+  checkpoint_path: "/gpfs/mariana/home/artfed/projects/guided-modality-adapter/assets/checkpoints/pyannote_embed.bin"
+  embedding_dim: 512
+  sample_rate: 16000
+  window_sec: 1.0
+  hop_sec: 0.5
+  stride: 10
+  batch_size_windows: 32
+
+projectors:
+  speech:
+    speech_in_dim: 1024
+    q_speech: 256
+    n_heads: 4
+    dropout: 0.1
+    d_model: 4096
+  speaker:
+    spk_in_dim: 512
+    q_speech: 128
+    n_heads: 4
+    dropout: 0.1
+    d_model: 4096
+  unified:
+    d_model: 4096
+    n_heads: 4
+    n_blocks: 2
+    dropout: 0.1
+
+llm:
+  model_name: "meta-llama/Llama-3.2-1B-Instruct"
+  num_speakers: 3
+  max_time_s: 30.0
+  step_ms: 20
+  lora_r: 8
+  lora_alpha: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+  lora_dropout: 0.05
+
+training:
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_steps: 1000
+  max_steps: 100000
+  max_epochs: 5
+  grad_clip: 1.0
+  precision: 16
+  log_every_n_steps: 50
