@@ -1,9 +1,7 @@
 from typing import Optional
 
-import torch
 import torch.nn as nn
 from torch import Tensor
-import torch.nn.functional as F
 
 
 class FeedForward(nn.Module):
