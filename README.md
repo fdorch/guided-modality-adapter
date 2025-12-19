@@ -18,15 +18,15 @@ Because of the underlying LLM usage, the proposed method could be used to do a v
 - Translation
 - And more...
 
-## 📍Architecture Overview
+## 📍Pretraining paradigm
 <p align="center">
- <img src="assets/images/high-level-arch.png" alt="Architecture Overview" width="80%">
+ <img src="assets/images/pretrain.png" alt="Pretraining paradigm" width="80%">
 </p>
 
 
-## 🔎 Projector Module
+## 🔎 Training paradigm
 <p align="center">
- <img src="assets/images/projector.png" alt="Architecture Overview" width="100%">
+ <img src="assets/images/training.png" alt="Architecture Overview" width="100%">
 </p>
 
 Both speaker projector and speech projector modules are implemented as Qformer networks.
